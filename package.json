@@ -1,0 +1,28 @@
+{
+    "name": "ecovermic-backend",
+    "version": "1.0.0",
+    "description": "",
+    "main": "main.mts",
+    "bin": "main.mts",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "start": "node main.mts"
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "dependencies": {
+        "express": "^5.1.0"
+    },
+    "devDependencies": {
+        "@types/express": "^5.0.6",
+        "@types/node": "25.9.3",
+        "typescript": "6.0.3"
+    },
+    "imports": {
+        "#Infrastructure/*": "./infrastructure/*/index.mts",
+        "#Models/*": "./models/*/index.mts",
+        "#Application/*": "./application/*/index.mts",
+        "#Routes/*": "./routes/*/index.mts"
+    }
+}
