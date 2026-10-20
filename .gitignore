@@ -115,3 +115,4 @@ dist-server/
 # IDEs
 .vscode/
 .idea/
+ecovermic.db

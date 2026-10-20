@@ -23,31 +23,36 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
     res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Error interno del servidor" } });
 });
 
-app.listen(port, host, () => {
-    const localtonet = spawn("localtonet",
-        [
-            "--authtoken",
-            token
-        ], {
-        stdio: [
-            "ignore",
-            "pipe",
-            "ignore"
-        ]
-    });
-
-    if (localtonet.stdout) {
-        const { stdout } = localtonet;
-        stdout.on("data", chunk => {
-            const line = String(chunk)
-            if (line.includes(`${host}:${port}`)) {
-                const split = line.split("ADDED")
-                if (split.length < 2) return;
-                const url = split[1].split(":")[0].trim();
-                console.log(`Server started on https://${url}`);
-            }
-        });
+app.listen(port, host, (error?: Error) => {
+    if (error) {
+        console.error(`No se pudo iniciar el servidor en ${host}:${port}:`, error.message);
+        process.exit(1);
     }
+    console.log(`Server started on http://${host}:${port}`);
+    // const localtonet = spawn("localtonet",
+    //     [
+    //         "--authtoken",
+    //         token
+    //     ], {
+    //     stdio: [
+    //         "ignore",
+    //         "pipe",
+    //         "ignore"
+    //     ]
+    // });
 
-    localtonet.on("exit", (code) => process.exit(code ?? 0));
+    // if (localtonet.stdout) {
+    //     const { stdout } = localtonet;
+    //     stdout.on("data", chunk => {
+    //         const line = String(chunk)
+    //         if (line.includes(`${host}:${port}`)) {
+    //             const split = line.split("ADDED")
+    //             if (split.length < 2) return;
+    // const url = split[1].split(":")[0].trim();
+    // console.log(`Server started on https://${url}`);
+    //         }
+    //     });
+    // }
+
+    // localtonet.on("exit", (code) => process.exit(code ?? 0));
 });
