@@ -1,16 +1,27 @@
-import { Entity } from "#Models/enterprise";
 import express from "express";
 import { spawn } from "node:child_process"
+import usersRouter from "#Routes/users";
 
 process.loadEnvFile();
-
-const enterprise = new Entity;
 
 const host = process.env.HOST || "127.0.0.1";
 const port = Number(process.env.PORT || 3000);
 const token = String(process.env.LOCALTO_TOKEN);
 
 const app = express();
+
+app.use(express.json());
+app.use("/users", usersRouter);
+
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (res.headersSent) return next(err);
+    if (err?.type === "entity.parse.failed") {
+        res.status(400).json({ error: { code: "INVALID_JSON", message: "El cuerpo de la petición no es un JSON válido" } });
+        return;
+    }
+    console.error(err);
+    res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Error interno del servidor" } });
+});
 
 app.listen(port, host, () => {
     const localtonet = spawn("localtonet",
