@@ -73,7 +73,8 @@ Se devuelve en el registro (paso 2) y en el login.
 ```
 1. POST /users/register          -> registrationToken   (válido 1 hora)
 2. POST /users/register/profile  -> crea el usuario y envía el correo de confirmación
-3. GET  /users/confirm?token=... -> confirma el correo (enlace recibido por correo, válido 24 horas)
+3. POST /users/confirm          -> confirma el correo con el código de 6 dígitos recibido por correo (válido 15 minutos)
+   POST /users/confirm/resend   -> (opcional) envía un código nuevo
 4. POST /users/login             -> JWT (solo con el correo confirmado)
 ```
 
@@ -169,15 +170,20 @@ Si la cuenta se creó pero el correo no se pudo enviar, la respuesta sigue siend
 
 ---
 
-## `GET /users/confirm?token=<token>`: Confirmar correo
+## `POST /users/confirm`: Confirmar correo con código
 
-El usuario llega aquí desde el enlace del correo (`<APP_URL>/users/confirm?token=...`). Marca la cuenta como verificada y invalida el token.
+El usuario recibe por correo un código de **6 dígitos numéricos** (válido 15 minutos) y lo envía junto con su correo. Marca la cuenta como verificada e invalida el código. Tras 5 intentos fallidos el código se bloquea y hay que pedir uno nuevo.
 
-### Parámetros de consulta
+### Cuerpo
 
-| Parámetro | Tipo | Descripción |
+| Campo | Tipo | Reglas |
 |---|---|---|
-| `token` | string | Obligatorio. Token de confirmación recibido por correo. |
+| `email` | string | Obligatorio. Correo con el que se registró. |
+| `code` | string | Obligatorio. Exactamente 6 dígitos (`^[0-9]{6}$`). Enviar como texto para conservar ceros iniciales (`"004821"`). |
+
+```json
+{ "email": "ana@correo.com", "code": "482913" }
+```
 
 ### Respuesta `200 OK`
 
@@ -185,18 +191,50 @@ El usuario llega aquí desde el enlace del correo (`<APP_URL>/users/confirm?toke
 { "message": "Cuenta confirmada correctamente" }
 ```
 
+Si la cuenta ya estaba confirmada responde `200` con `"La cuenta ya estaba confirmada"`.
+
 ### Errores
 
 | HTTP | code | Detalle |
 |---|---|---|
-| 400 | `TOKEN_REQUIRED` | Falta el parámetro `token`. |
-| 400 | `CONFIRMATION_TOKEN_INVALID` | Token desconocido o ya utilizado. |
-| 410 | `CONFIRMATION_TOKEN_EXPIRED` | El enlace expiró (más de 24 horas). |
-
-> Nota: aún no existe un endpoint para reenviar el correo de confirmación.
+| 400 | `VALIDATION_ERROR` | `fields.email` (`EMAIL_REQUIRED`) o `fields.code` (`CODE_REQUIRED`, `CODE_INVALID_FORMAT`). |
+| 400 | `CONFIRMATION_CODE_INVALID` | Código incorrecto, o correo sin código pendiente (mismo error para no revelar qué cuentas existen). Cada código incorrecto cuenta como un intento. |
+| 410 | `CONFIRMATION_CODE_EXPIRED` | El código expiró. Solicitar uno nuevo. |
+| 429 | `TOO_MANY_ATTEMPTS` | 5 intentos fallidos. Solicitar un código nuevo. |
 
 ---
 
+## `POST /users/confirm/resend`: Reenviar código
+
+Genera y envía un código nuevo (el anterior deja de valer y los intentos se reinician). Espera mínima de 60 segundos entre envíos.
+
+### Cuerpo
+
+| Campo | Tipo | Reglas |
+|---|---|---|
+| `email` | string | Obligatorio. |
+
+```json
+{ "email": "ana@correo.com" }
+```
+
+### Respuesta `200 OK`
+
+```json
+{ "message": "Si la cuenta existe y no está confirmada, se envió un código nuevo" }
+```
+
+La respuesta es la misma exista o no la cuenta, o ya esté confirmada.
+
+### Errores
+
+| HTTP | code | Detalle |
+|---|---|---|
+| 400 | `VALIDATION_ERROR` | `fields.email` (`EMAIL_REQUIRED`). |
+| 429 | `RESEND_TOO_SOON` | Pasaron menos de 60 segundos desde el último envío. |
+| 502 | `EMAIL_SEND_FAILED` | No se pudo enviar el correo. |
+
+---
 ## `POST /users/login`: Iniciar sesión
 
 ### Cuerpo
@@ -255,8 +293,10 @@ curl -X POST http://127.0.0.1:3000/users/register/profile \
   -H "Content-Type: application/json" \
   -d '{"registrationToken":"<TOKEN>","name":"Ana","age":25,"gender":"Mujer","countryCode":"+52","phone":"5512345678"}'
 
-# 3. Confirmar (enlace del correo)
-curl "http://127.0.0.1:3000/users/confirm?token=<TOKEN_DEL_CORREO>"
+# 3. Confirmar (código de 6 dígitos del correo)
+curl -X POST http://127.0.0.1:3000/users/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"email":"ana@correo.com","code":"482913"}'
 
 # 4. Login
 curl -X POST http://127.0.0.1:3000/users/login \
@@ -286,12 +326,11 @@ const { token } = data;
 |---|---|
 | `HOST`, `PORT` | Dirección y puerto (por defecto `127.0.0.1` y `3000`). |
 | `AUTH_SECRET` | Secreto para firmar los JWT. Obligatorio en producción; si falta se usa uno temporal y los tokens se invalidan al reiniciar. |
-| `APP_URL` | URL pública base usada en el enlace del correo de confirmación. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Envío de correo. Sin `SMTP_HOST` el correo se imprime en la consola (desarrollo). |
 
 ## Modelo de datos (SQLite, `ecovermic.db`)
 
-- **`users`**: `id`, `email` (único), `password_hash` (scrypt con sal), `created_at`, `name`, `age`, `gender`, `country_code`, `phone`, `email_verified`, `age_verified`, `confirmation_token_hash`, `confirmation_expires_at`.
+- **`users`**: `id`, `email` (único), `password_hash` (scrypt con sal), `created_at`, `name`, `age`, `gender`, `country_code`, `phone`, `email_verified`, `age_verified`, `confirmation_code_hash`, `confirmation_expires_at`, `confirmation_attempts`, `confirmation_sent_at`.
 - **`pending_registrations`**: `email` (clave), `password_hash`, `token_hash`, `expires_at`.
 
-Los tokens de registro y de confirmación se almacenan como hash SHA-256; nunca en texto plano.
+El token de registro y el código de confirmación se almacenan como hash SHA-256; nunca en texto plano.

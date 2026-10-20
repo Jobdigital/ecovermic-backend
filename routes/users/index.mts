@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomInt, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "#Infrastructure/database";
 import { sendMail } from "#Infrastructure/mailer";
@@ -20,7 +20,11 @@ const AGE_MIN = 1;
 const AGE_MAX = 120;
 
 const PENDING_TTL_MS = 60 * 60 * 1000;
-const CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000;
+const CONFIRMATION_TTL_MS = 15 * 60 * 1000;
+const CODE_LENGTH = 6;
+const CODE_REGEX = /^[0-9]{6}$/;
+const MAX_CODE_ATTEMPTS = 5;
+const RESEND_COOLDOWN_MS = 60 * 1000;
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -49,8 +53,10 @@ const newColumns: Record<string, string> = {
     phone: "TEXT",
     email_verified: "INTEGER NOT NULL DEFAULT 0",
     age_verified: "INTEGER NOT NULL DEFAULT 0",
-    confirmation_token_hash: "TEXT",
+    confirmation_code_hash: "TEXT",
     confirmation_expires_at: "INTEGER",
+    confirmation_attempts: "INTEGER NOT NULL DEFAULT 0",
+    confirmation_sent_at: "INTEGER",
 };
 for (const [column, definition] of Object.entries(newColumns)) {
     if (!existingColumns.has(column)) db.exec(`ALTER TABLE users ADD COLUMN ${column} ${definition}`);
@@ -74,11 +80,27 @@ const duplicatedEmail = {
     },
 };
 
-const baseUrl = () => {
-    const host = process.env.HOST || "127.0.0.1";
-    const port = process.env.PORT || 3000;
-    return (process.env.APP_URL || `http://${host}:${port}`).replace(/\/$/, "");
-};
+const generateCode = () => String(randomInt(0, 1_000_000)).padStart(CODE_LENGTH, "0");
+// El código se liga al correo para que el mismo código en dos cuentas no produzca el mismo hash
+const hashCode = (email: string, code: string) => sha256(`${email}:${code}`);
+
+async function sendConfirmationCode(email: string, name: string, code: string): Promise<boolean> {
+    const minutes = CONFIRMATION_TTL_MS / 60000;
+    try {
+        await sendMail(
+            email,
+            "Tu código de confirmación de Ecovermic",
+            `Hola ${name}, tu código de confirmación es: ${code}\nExpira en ${minutes} minutos.`,
+            `<p>Hola ${escapeHtml(name)}, tu código de confirmación es:</p>` +
+                `<p style="font-size:24px;letter-spacing:4px"><strong>${code}</strong></p>` +
+                `<p>Expira en ${minutes} minutos.</p>`,
+        );
+        return true;
+    } catch (error) {
+        console.error("No se pudo enviar el correo de confirmación:", error);
+        return false;
+    }
+}
 
 const router = Router();
 
@@ -237,7 +259,7 @@ router.post("/register/profile", async (req, res, next) => {
             return;
         }
 
-        const confirmationToken = randomBytes(32).toString("hex");
+        const confirmationCode = generateCode();
         let userId: number;
 
         try {
@@ -245,8 +267,9 @@ router.post("/register/profile", async (req, res, next) => {
             const { lastInsertRowid } = db
                 .prepare(
                     `INSERT INTO users (email, password_hash, name, age, gender, country_code, phone,
-                                        email_verified, confirmation_token_hash, confirmation_expires_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+                                        email_verified, confirmation_code_hash, confirmation_expires_at,
+                                        confirmation_attempts, confirmation_sent_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, 0, ?)`,
                 )
                 .run(
                     pending.email,
@@ -256,8 +279,9 @@ router.post("/register/profile", async (req, res, next) => {
                     gender as string,
                     (countryCode as string).trim(),
                     (phone as string).trim(),
-                    sha256(confirmationToken),
+                    hashCode(pending.email, confirmationCode),
                     Date.now() + CONFIRMATION_TTL_MS,
+                    Date.now(),
                 );
             db.prepare("DELETE FROM pending_registrations WHERE email = ?").run(pending.email);
             db.exec("COMMIT");
@@ -271,69 +295,175 @@ router.post("/register/profile", async (req, res, next) => {
             throw error;
         }
 
-        const link = `${baseUrl()}/users/confirm?token=${confirmationToken}`;
-        let emailSent = true;
-        try {
-            await sendMail(
-                pending.email,
-                "Confirma tu cuenta de Ecovermic",
-                `Hola ${(name as string).trim()}, confirma tu cuenta ingresando a: ${link}\nEl enlace expira en 24 horas.`,
-                `<p>Hola ${escapeHtml((name as string).trim())}, confirma tu cuenta:</p>` +
-                    `<p><a href="${link}">Confirmar cuenta</a></p><p>El enlace expira en 24 horas.</p>`,
-            );
-        } catch (error) {
-            emailSent = false;
-            console.error("No se pudo enviar el correo de confirmación:", error);
-        }
+        const emailSent = await sendConfirmationCode(pending.email, (name as string).trim(), confirmationCode);
 
         res.status(201).json({
             id: userId,
             email: pending.email,
             emailSent,
             access: getAccess(age as number, false),
-            ...(emailSent ? {} : { warning: "Cuenta creada, pero no se pudo enviar el correo de confirmación" }),
+            ...(emailSent ? {} : { warning: "Cuenta creada, pero no se pudo enviar el código. Solicita uno nuevo" }),
         });
     } catch (error) {
         next(error);
     }
 });
 
-// Confirmación de cuenta desde el enlace del correo
-router.get("/confirm", (req, res, next) => {
+type ConfirmationRow = {
+    id: number;
+    name: string | null;
+    email_verified: number;
+    confirmation_code_hash: string | null;
+    confirmation_expires_at: number | null;
+    confirmation_attempts: number;
+    confirmation_sent_at: number | null;
+};
+
+const findForConfirmation = (email: string) =>
+    db
+        .prepare(
+            `SELECT id, name, email_verified, confirmation_code_hash, confirmation_expires_at,
+                    confirmation_attempts, confirmation_sent_at
+             FROM users WHERE email = ?`,
+        )
+        .get(email) as ConfirmationRow | undefined;
+
+const codeInvalid = {
+    error: { code: "CONFIRMATION_CODE_INVALID", message: "El código de confirmación no es válido" },
+};
+
+// Confirmación de cuenta con el código de 6 dígitos recibido por correo
+router.post("/confirm", (req, res, next) => {
     try {
-        const token = req.query.token;
-        if (typeof token !== "string" || token === "") {
+        const body = req.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
             res.status(400).json({
-                error: { code: "TOKEN_REQUIRED", message: "El token de confirmación es obligatorio" },
+                error: { code: "INVALID_BODY", message: "Se espera un JSON con email y code" },
             });
             return;
         }
 
-        const user = db
-            .prepare("SELECT id, email_verified, confirmation_expires_at FROM users WHERE confirmation_token_hash = ?")
-            .get(sha256(token)) as
-            | { id: number; email_verified: number; confirmation_expires_at: number }
-            | undefined;
+        const { email, code } = body as Record<string, unknown>;
+        const errors: FieldErrors = {};
+        if (isEmpty(email) || typeof email !== "string") {
+            errors.email = { code: "EMAIL_REQUIRED", message: "El correo electrónico es obligatorio" };
+        }
+        if (isEmpty(code)) {
+            errors.code = { code: "CODE_REQUIRED", message: "El código es obligatorio" };
+        } else if (typeof code !== "string" || !CODE_REGEX.test(code.trim())) {
+            errors.code = { code: "CODE_INVALID_FORMAT", message: `El código debe tener ${CODE_LENGTH} dígitos numéricos` };
+        }
+        if (Object.keys(errors).length > 0) {
+            res.status(400).json(validationError(errors));
+            return;
+        }
 
-        if (!user) {
-            res.status(400).json({
-                error: { code: "CONFIRMATION_TOKEN_INVALID", message: "El enlace de confirmación no es válido" },
+        const normalizedEmail = (email as string).trim().toLowerCase();
+        const user = findForConfirmation(normalizedEmail);
+
+        // Mismo error para correo inexistente o sin código pendiente, para no revelar qué cuentas existen
+        if (!user || (!user.email_verified && !user.confirmation_code_hash)) {
+            res.status(400).json(codeInvalid);
+            return;
+        }
+
+        if (user.email_verified) {
+            res.json({ message: "La cuenta ya estaba confirmada" });
+            return;
+        }
+
+        if (user.confirmation_attempts >= MAX_CODE_ATTEMPTS) {
+            res.status(429).json({
+                error: {
+                    code: "TOO_MANY_ATTEMPTS",
+                    message: "Demasiados intentos fallidos. Solicita un código nuevo",
+                },
             });
             return;
         }
 
-        if (user.confirmation_expires_at < Date.now()) {
+        if ((user.confirmation_expires_at ?? 0) < Date.now()) {
             res.status(410).json({
-                error: { code: "CONFIRMATION_TOKEN_EXPIRED", message: "El enlace de confirmación expiró" },
+                error: { code: "CONFIRMATION_CODE_EXPIRED", message: "El código expiró. Solicita uno nuevo" },
             });
+            return;
+        }
+
+        const expected = Buffer.from(user.confirmation_code_hash!);
+        const received = Buffer.from(hashCode(normalizedEmail, (code as string).trim()));
+        if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+            db.prepare("UPDATE users SET confirmation_attempts = confirmation_attempts + 1 WHERE id = ?").run(user.id);
+            res.status(400).json(codeInvalid);
             return;
         }
 
         db.prepare(
-            "UPDATE users SET email_verified = 1, confirmation_token_hash = NULL, confirmation_expires_at = NULL WHERE id = ?",
+            `UPDATE users SET email_verified = 1, confirmation_code_hash = NULL, confirmation_expires_at = NULL,
+                    confirmation_attempts = 0 WHERE id = ?`,
         ).run(user.id);
 
         res.json({ message: "Cuenta confirmada correctamente" });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Reenvío de un código nuevo (invalida el anterior)
+router.post("/confirm/resend", async (req, res, next) => {
+    try {
+        const body = req.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+            res.status(400).json({
+                error: { code: "INVALID_BODY", message: "Se espera un JSON con email" },
+            });
+            return;
+        }
+
+        const { email } = body as Record<string, unknown>;
+        if (isEmpty(email) || typeof email !== "string") {
+            res.status(400).json(
+                validationError({ email: { code: "EMAIL_REQUIRED", message: "El correo electrónico es obligatorio" } }),
+            );
+            return;
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        const user = findForConfirmation(normalizedEmail);
+
+        // Respuesta idéntica exista o no la cuenta, para no revelar qué correos están registrados
+        const accepted = { message: "Si la cuenta existe y no está confirmada, se envió un código nuevo" };
+
+        if (!user || user.email_verified) {
+            res.json(accepted);
+            return;
+        }
+
+        const wait = (user.confirmation_sent_at ?? 0) + RESEND_COOLDOWN_MS - Date.now();
+        if (wait > 0) {
+            res.status(429).json({
+                error: {
+                    code: "RESEND_TOO_SOON",
+                    message: `Espera ${Math.ceil(wait / 1000)} segundos antes de solicitar otro código`,
+                },
+            });
+            return;
+        }
+
+        const code = generateCode();
+        db.prepare(
+            `UPDATE users SET confirmation_code_hash = ?, confirmation_expires_at = ?, confirmation_attempts = 0,
+                    confirmation_sent_at = ? WHERE id = ?`,
+        ).run(hashCode(normalizedEmail, code), Date.now() + CONFIRMATION_TTL_MS, Date.now(), user.id);
+
+        const sent = await sendConfirmationCode(normalizedEmail, user.name ?? "", code);
+        if (!sent) {
+            res.status(502).json({
+                error: { code: "EMAIL_SEND_FAILED", message: "No se pudo enviar el correo. Inténtalo más tarde" },
+            });
+            return;
+        }
+
+        res.json(accepted);
     } catch (error) {
         next(error);
     }
