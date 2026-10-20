@@ -1,9 +1,10 @@
 import { Router } from "express";
-import { createHash, randomBytes, scrypt } from "node:crypto";
+import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { db } from "#Infrastructure/database";
 import { sendMail } from "#Infrastructure/mailer";
 import { getAccess } from "#Application/access";
+import { signToken } from "#Application/auth";
 
 const scryptAsync = promisify(scrypt);
 
@@ -333,6 +334,86 @@ router.get("/confirm", (req, res, next) => {
         ).run(user.id);
 
         res.json({ message: "Cuenta confirmada correctamente" });
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Login: solo cuentas con correo confirmado
+const DUMMY_HASH = `${"00".repeat(16)}:${"00".repeat(64)}`;
+
+async function passwordMatches(password: string, stored: string): Promise<boolean> {
+    const [saltHex, hashHex] = stored.split(":");
+    const expected = Buffer.from(hashHex ?? "", "hex");
+    const actual = (await scryptAsync(password, Buffer.from(saltHex ?? "", "hex"), 64)) as Buffer;
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+router.post("/login", async (req, res, next) => {
+    try {
+        const body = req.body;
+        if (typeof body !== "object" || body === null || Array.isArray(body)) {
+            res.status(400).json({
+                error: { code: "INVALID_BODY", message: "Se espera un JSON con email y password" },
+            });
+            return;
+        }
+
+        const { email, password } = body as Record<string, unknown>;
+        const errors: FieldErrors = {};
+        if (isEmpty(email) || typeof email !== "string") {
+            errors.email = { code: "EMAIL_REQUIRED", message: "El correo electrónico es obligatorio" };
+        }
+        if (isEmpty(password) || typeof password !== "string") {
+            errors.password = { code: "PASSWORD_REQUIRED", message: "La contraseña es obligatoria" };
+        }
+        if (Object.keys(errors).length > 0) {
+            res.status(400).json(validationError(errors));
+            return;
+        }
+
+        const user = db
+            .prepare("SELECT id, email, name, age, age_verified, email_verified, password_hash FROM users WHERE email = ?")
+            .get((email as string).trim().toLowerCase()) as
+            | {
+                  id: number;
+                  email: string;
+                  name: string | null;
+                  age: number | null;
+                  age_verified: number;
+                  email_verified: number;
+                  password_hash: string;
+              }
+            | undefined;
+
+        // Se compara siempre contra un hash para no revelar por tiempo si el correo existe
+        const valid = await passwordMatches((password as string), user?.password_hash ?? DUMMY_HASH);
+        if (!user || !valid) {
+            res.status(401).json({
+                error: { code: "INVALID_CREDENTIALS", message: "Correo electrónico o contraseña incorrectos" },
+            });
+            return;
+        }
+
+        if (!user.email_verified) {
+            res.status(403).json({
+                error: {
+                    code: "ACCOUNT_NOT_VERIFIED",
+                    message: "Debes confirmar tu correo electrónico antes de iniciar sesión",
+                },
+            });
+            return;
+        }
+
+        res.json({
+            token: signToken(user.id),
+            user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                access: getAccess(user.age ?? 0, user.age_verified === 1),
+            },
+        });
     } catch (error) {
         next(error);
     }
