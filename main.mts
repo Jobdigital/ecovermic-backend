@@ -1,6 +1,7 @@
 import express from "express";
 // import { spawn } from "node:child_process"
 import usersRouter from "#Routes/users";
+import { logHttp } from "#Infrastructure/http-logging";
 
 process.loadEnvFile();
 
@@ -10,6 +11,7 @@ const token = String(process.env.LOCALTO_TOKEN);
 
 const app = express();
 
+app.use(logHttp);
 app.use(express.json());
 app.use("/users", usersRouter);
 

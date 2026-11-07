@@ -1,17 +1,23 @@
 # Ecovermic Backend: Documentación de la API
 
-API REST en JSON. Esta guía describe todos los endpoints actuales con la información necesaria para consumirlos desde cualquier lenguaje o IA.
+API REST. Esta guía describe los endpoints actuales con la información necesaria para consumirlos desde cualquier lenguaje o IA. La documentación funcional de VERMI APP describe objetivos y funcionalidades futuras; no todas están implementadas en este backend.
 
 ## Convenciones generales
 
 - **Base URL:** `http://<HOST>:<PORT>` (por defecto `http://127.0.0.1:3000`). Configurable con `HOST` y `PORT` en `.env`.
-- **Formato:** todas las peticiones con cuerpo deben enviar `Content-Type: application/json`. Todas las respuestas son JSON.
-- **Autenticación:** JWT (HS256, expira en 7 días). Se obtiene en `POST /users/login` y se envía en el header `Authorization: Bearer <token>`. El id del usuario va en el claim `sub`. Aún no hay rutas protegidas.
+- **Formato:** los endpoints documentados esperan un cuerpo JSON de tipo objeto con `Content-Type: application/json` y devuelven JSON. Una ruta o método no reconocido recibe la respuesta `404` predeterminada de Express, que no sigue necesariamente el formato JSON de la API.
+- **Autenticación:** `POST /users/login` devuelve un JWT firmado con HS256 que expira en 7 días. El claim `sub` contiene el identificador del usuario como texto. Actualmente no hay rutas protegidas ni middleware que lea el encabezado `Authorization`, por lo que ningún endpoint requiere enviar el token.
 - **Texto y correos:** el correo se normaliza (sin espacios en los extremos y en minúsculas). Los mensajes de error están en español.
+
+### Registro de peticiones
+
+El registro HTTP de consola registra cada petición al recibirla y su resultado al terminar o cerrarse la conexión; ambas entradas comparten un identificador. Muestra el método y el endpoint solicitado cuando coincide con uno de los endpoints conocidos; las rutas desconocidas se ocultan para evitar exponer datos en la URL. El resultado incluye la ruta procesada, el estado HTTP y la duración.
+
+El cuerpo JSON interpretado se muestra con todos sus valores ocultos: se conservan los nombres de los campos conocidos y la estructura de objetos y arreglos, con límites de profundidad y tamaño; los demás nombres de campos se ocultan. Si el cuerpo no pudo interpretarse, se indica como no disponible. Los parámetros de consulta se ocultan por completo y no se registran los encabezados. El registro no muestra el texto crudo sin redactar. Para el resultado se muestran `emailSent` cuando está presente y los códigos de error, sin el cuerpo de respuesta. Otros registros del servidor pueden incluir datos sensibles: sin SMTP, el módulo de correo imprime el destinatario y el código de confirmación en consola.
 
 ### Formato de errores
 
-Todos los errores comparten esta estructura:
+Los errores JSON gestionados por los endpoints y el middleware de errores tienen esta estructura:
 
 ```json
 {
@@ -28,13 +34,15 @@ Todos los errores comparten esta estructura:
 - `code` es estable y apto para lógica del cliente; `message` es para mostrar al usuario.
 - `fields` solo aparece en errores de validación o de correo duplicado.
 
-### Errores globales (cualquier endpoint)
+### Errores generales
 
 | HTTP | code | Cuándo |
 |---|---|---|
-| 400 | `INVALID_JSON` | El cuerpo no es un JSON válido. |
-| 400 | `INVALID_BODY` | El cuerpo no es un objeto JSON (por ejemplo un arreglo o `null`). |
-| 500 | `INTERNAL_ERROR` | Error inesperado del servidor. |
+| 400 | `INVALID_JSON` | El JSON está mal formado o es un valor primitivo, como `null`, una cadena o un número; el parser de Express solo acepta objetos y arreglos. |
+| 400 | `INVALID_BODY` | El cuerpo no fue interpretado como JSON o es un arreglo, en cualquiera de los endpoints documentados. |
+| 500 | `INTERNAL_ERROR` | Error no tratado por el servidor, incluidos errores del parser distintos de `entity.parse.failed`, como un cuerpo que supera el límite predeterminado de 100 KB. |
+
+Las rutas o métodos no reconocidos responden `404` con el manejador predeterminado de Express, no con el formato de error anterior. Un cuerpo vacío con `Content-Type: application/json` se interpreta como `{}` y produce errores de validación de campos obligatorios.
 
 ## Reglas de negocio por edad
 
@@ -44,7 +52,9 @@ Todos los errores comparten esta estructura:
 | Menor de 18 años | Acceso limitado: sin canjes presenciales ni publicación de productos / aceptación de ofertas. Requiere definir la intervención del representante legal. |
 | Edad no verificada | Se bloquean los canjes que requieren mayoría de edad hasta verificar. |
 
-La edad declarada en el registro **no está verificada** (`ageVerified: false`). Por eso todo usuario nuevo tiene `canRedeemInPerson: false`.
+Estas reglas se reflejan en el objeto `access`, pero todavía no existen endpoints de monedas, publicación de productos, ofertas o canjes que las apliquen. La intervención del representante legal aún no está implementada.
+
+La edad declarada en el registro **no está verificada** (`ageVerified: false`). Por eso todo usuario nuevo tiene `canRedeemInPerson: false`. Actualmente no existe un endpoint para verificar la edad. Para usuarios anteriores sin edad registrada, el login calcula el acceso usando `0` como edad; esto produce `level: "limited"` y `requiresLegalGuardian: true`.
 
 ### Objeto `access`
 
@@ -62,9 +72,9 @@ Se devuelve en el registro (paso 2) y en el login.
 
 | Campo | Tipo | Significado |
 |---|---|---|
-| `level` | `"full"` \| `"limited"` | `full` si es mayor de edad, `limited` si es menor. |
+| `level` | `"full"` \| `"limited"` | `full` si la edad declarada es al menos 18, `limited` en caso contrario; no depende de la verificación. |
 | `canRedeemInPerson` | boolean | Mayor de edad **y** edad verificada. |
-| `canPublishAndAcceptOffers` | boolean | Solo mayores de edad. |
+| `canPublishAndAcceptOffers` | boolean | `true` si la edad declarada es al menos 18, incluso si no está verificada. |
 | `requiresLegalGuardian` | boolean | `true` para menores. |
 | `ageVerified` | boolean | Si la edad fue verificada. |
 
@@ -72,13 +82,13 @@ Se devuelve en el registro (paso 2) y en el login.
 
 ```
 1. POST /users/register          -> registrationToken   (válido 1 hora)
-2. POST /users/register/profile  -> crea el usuario y envía el correo de confirmación
+2. POST /users/register/profile  -> crea el usuario e intenta enviar el correo de confirmación
 3. POST /users/confirm          -> confirma el correo con el código de 6 dígitos recibido por correo (válido 15 minutos)
    POST /users/confirm/resend   -> (opcional) envía un código nuevo
 4. POST /users/login             -> JWT (solo con el correo confirmado)
 ```
 
-El usuario **no existe** hasta completar el paso 2. Si repites el paso 1 con el mismo correo, el registro pendiente anterior se reemplaza y su token deja de valer.
+El usuario **no existe** hasta completar el paso 2. Si repites el paso 1 con el mismo correo, el registro pendiente anterior se reemplaza y su token deja de valer. El paso 2 puede crear la cuenta aunque falle el envío del correo.
 
 ---
 
@@ -92,6 +102,8 @@ Valida correo y contraseña y guarda un registro pendiente. No crea el usuario.
 |---|---|---|
 | `email` | string | Obligatorio. Regex `^[^\s@]+@[^\s@]+\.[^\s@]+$`, máximo 254 caracteres. |
 | `password` | string | Obligatorio. Regex `^(?=.*[A-Za-z])(?=.*[0-9]).{8,128}$` (8 a 128 caracteres, al menos una letra y un número). |
+
+El correo se valida después de retirar espacios en los extremos; la contraseña se valida y procesa sin recortarla ni normalizarla. La expresión de contraseña no admite saltos de línea.
 
 ```json
 { "email": "ana@correo.com", "password": "Clave1234" }
@@ -123,11 +135,11 @@ Valida el perfil, crea el usuario (sin verificar) y envía el correo de confirma
 | Campo | Tipo | Reglas |
 |---|---|---|
 | `registrationToken` | string | Obligatorio. El token del paso 1. |
-| `name` | string | Obligatorio. Nombre o apodo, de 2 a 30 caracteres (sin espacios en los extremos). |
+| `name` | string | Obligatorio. Nombre o apodo, de 2 a 30 caracteres después de retirar los espacios en los extremos. |
 | `age` | number | Obligatorio. Entero entre 1 y 120. Debe enviarse como número JSON, no como texto. |
 | `gender` | string | Obligatorio. Exactamente uno de: `Mujer`, `Hombre`, `No binario`, `Otro`. |
-| `countryCode` | string | Obligatorio. Regex `^\+[1-9][0-9]{0,3}$` (ejemplo `+52`). |
-| `phone` | string | Obligatorio. Exactamente 10 dígitos (`^[0-9]{10}$`). Enviar como texto. |
+| `countryCode` | string | Obligatorio. Se retiran los espacios en los extremos y se valida con `^\+[1-9][0-9]{0,3}$` (ejemplo `+52`). |
+| `phone` | string | Obligatorio. Después de retirar espacios en los extremos, exactamente 10 dígitos (`^[0-9]{10}$`), independientemente del país. Enviar como texto. |
 
 ```json
 {
@@ -159,6 +171,8 @@ Valida el perfil, crea el usuario (sin verificar) y envía el correo de confirma
 
 Si la cuenta se creó pero el correo no se pudo enviar, la respuesta sigue siendo `201` con `"emailSent": false` y un campo `"warning"`.
 
+Sin `SMTP_HOST`, se imprime el correo en la consola y `emailSent` es `true`, aunque no se haya enviado por SMTP.
+
 ### Errores
 
 | HTTP | code | Detalle |
@@ -167,6 +181,8 @@ Si la cuenta se creó pero el correo no se pudo enviar, la respuesta sigue siend
 | 401 | `REGISTRATION_TOKEN_INVALID` | El token no existe (o ya se usó). |
 | 410 | `REGISTRATION_EXPIRED` | El token expiró (más de 1 hora). Reiniciar desde el paso 1. |
 | 409 | `EMAIL_ALREADY_REGISTERED` | El correo ya fue registrado entre el paso 1 y el 2. |
+
+Tras responder `REGISTRATION_EXPIRED`, el registro pendiente se elimina; un intento posterior con el mismo token devuelve `REGISTRATION_TOKEN_INVALID`.
 
 ---
 
@@ -179,7 +195,7 @@ El usuario recibe por correo un código de **6 dígitos numéricos** (válido 15
 | Campo | Tipo | Reglas |
 |---|---|---|
 | `email` | string | Obligatorio. Correo con el que se registró. |
-| `code` | string | Obligatorio. Exactamente 6 dígitos (`^[0-9]{6}$`). Enviar como texto para conservar ceros iniciales (`"004821"`). |
+| `code` | string | Obligatorio. Después de retirar los espacios en los extremos, exactamente 6 dígitos (`^[0-9]{6}$`). Enviar como texto para conservar ceros iniciales (`"004821"`). |
 
 ```json
 { "email": "ana@correo.com", "code": "482913" }
@@ -201,6 +217,8 @@ Si la cuenta ya estaba confirmada responde `200` con `"La cuenta ya estaba confi
 | 400 | `CONFIRMATION_CODE_INVALID` | Código incorrecto, o correo sin código pendiente (mismo error para no revelar qué cuentas existen). Cada código incorrecto cuenta como un intento. |
 | 410 | `CONFIRMATION_CODE_EXPIRED` | El código expiró. Solicitar uno nuevo. |
 | 429 | `TOO_MANY_ATTEMPTS` | 5 intentos fallidos. Solicitar un código nuevo. |
+
+El quinto intento incorrecto aún devuelve `CONFIRMATION_CODE_INVALID`; los intentos posteriores devuelven `TOO_MANY_ATTEMPTS`. Solo se cuentan los códigos con formato válido que se comparan con un código pendiente y vigente.
 
 ---
 
@@ -224,7 +242,7 @@ Genera y envía un código nuevo (el anterior deja de valer y los intentos se re
 { "message": "Si la cuenta existe y no está confirmada, se envió un código nuevo" }
 ```
 
-La respuesta es la misma exista o no la cuenta, o ya esté confirmada.
+Esta respuesta `200` se devuelve tanto si la cuenta no existe o ya está confirmada como si se procesa correctamente un nuevo envío. Para una cuenta existente sin confirmar, también pueden responderse los errores `RESEND_TOO_SOON` o `EMAIL_SEND_FAILED`.
 
 ### Errores
 
@@ -233,6 +251,8 @@ La respuesta es la misma exista o no la cuenta, o ya esté confirmada.
 | 400 | `VALIDATION_ERROR` | `fields.email` (`EMAIL_REQUIRED`). |
 | 429 | `RESEND_TOO_SOON` | Pasaron menos de 60 segundos desde el último envío. |
 | 502 | `EMAIL_SEND_FAILED` | No se pudo enviar el correo. |
+
+El código anterior se invalida y se inicia el período de espera antes de intentar el envío. Si este falla, se devuelve `502` y hay que esperar antes de solicitar otro código.
 
 ---
 ## `POST /users/login`: Iniciar sesión
@@ -268,7 +288,7 @@ La respuesta es la misma exista o no la cuenta, o ya esté confirmada.
 }
 ```
 
-Usa el `token` en las siguientes peticiones: `Authorization: Bearer <token>`.
+El token se entrega al cliente, pero actualmente ningún endpoint lo solicita ni verifica.
 
 ### Errores
 
@@ -325,12 +345,21 @@ const { token } = data;
 | Variable | Descripción |
 |---|---|
 | `HOST`, `PORT` | Dirección y puerto (por defecto `127.0.0.1` y `3000`). |
-| `AUTH_SECRET` | Secreto para firmar los JWT. Obligatorio en producción; si falta se usa uno temporal y los tokens se invalidan al reiniciar. |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Envío de correo. Sin `SMTP_HOST` el correo se imprime en la consola (desarrollo). |
+| `AUTH_SECRET` | Secreto para firmar los JWT. Se recomienda configurarlo en producción; si falta se usa uno temporal y los tokens se invalidan al reiniciar. El servidor no lo exige. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Envío de correo. Deben estar disponibles en el entorno del proceso antes de iniciar la aplicación; el módulo de correo lee estas variables antes de que la aplicación cargue `.env`. Sin `SMTP_HOST`, el destinatario y el código se imprimen en consola en lugar de enviarse. `SMTP_PORT` es `587` por defecto y utiliza conexión segura directa cuando vale `465`. El remitente es `MAIL_FROM` o, si no está definido, `SMTP_USER`. |
+
+La aplicación carga `.env` con `process.loadEnvFile()` y requiere que exista el archivo en el directorio de trabajo. Para que las variables SMTP de ese archivo estén disponibles antes de importar el módulo de correo, se puede iniciar con `node --env-file=.env main.mts`.
+
+## Alcance frente a la documentación funcional
+
+- El backend actual no registra consentimientos, versiones de términos ni el país completo: el perfil solo recibe la clave de país y un teléfono de 10 dígitos, sin longitud variable por país.
+- La recuperación de contraseña y la limitación de intentos de inicio de sesión no están implementadas. La limitación documentada corresponde únicamente al código de confirmación.
+- Las contraseñas se almacenan con scrypt y sal; la documentación funcional recomienda Argon2id o bcrypt.
+- Dispositivos, residuos, entregas de humus, billetera, recompensas y canjes todavía no cuentan con endpoints ni tablas en este backend.
 
 ## Modelo de datos (SQLite, `ecovermic.db`)
 
 - **`users`**: `id`, `email` (único), `password_hash` (scrypt con sal), `created_at`, `name`, `age`, `gender`, `country_code`, `phone`, `email_verified`, `age_verified`, `confirmation_code_hash`, `confirmation_expires_at`, `confirmation_attempts`, `confirmation_sent_at`.
 - **`pending_registrations`**: `email` (clave), `password_hash`, `token_hash`, `expires_at`.
 
-El token de registro y el código de confirmación se almacenan como hash SHA-256; nunca en texto plano.
+El token de registro se almacena como hash SHA-256. El código de confirmación se almacena como hash SHA-256 de `correo_normalizado:código`, no en texto plano.

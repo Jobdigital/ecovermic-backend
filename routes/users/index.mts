@@ -92,8 +92,8 @@ async function sendConfirmationCode(email: string, name: string, code: string): 
             "Tu código de confirmación de Ecovermic",
             `Hola ${name}, tu código de confirmación es: ${code}\nExpira en ${minutes} minutos.`,
             `<p>Hola ${escapeHtml(name)}, tu código de confirmación es:</p>` +
-                `<p style="font-size:24px;letter-spacing:4px"><strong>${code}</strong></p>` +
-                `<p>Expira en ${minutes} minutos.</p>`,
+            `<p style="font-size:24px;letter-spacing:4px"><strong>${code}</strong></p>` +
+            `<p>Expira en ${minutes} minutos.</p>`,
         );
         return true;
     } catch (error) {
@@ -506,14 +506,14 @@ router.post("/login", async (req, res, next) => {
             .prepare("SELECT id, email, name, age, age_verified, email_verified, password_hash FROM users WHERE email = ?")
             .get((email as string).trim().toLowerCase()) as
             | {
-                  id: number;
-                  email: string;
-                  name: string | null;
-                  age: number | null;
-                  age_verified: number;
-                  email_verified: number;
-                  password_hash: string;
-              }
+                id: number;
+                email: string;
+                name: string | null;
+                age: number | null;
+                age_verified: number;
+                email_verified: number;
+                password_hash: string;
+            }
             | undefined;
 
         // Se compara siempre contra un hash para no revelar por tiempo si el correo existe
