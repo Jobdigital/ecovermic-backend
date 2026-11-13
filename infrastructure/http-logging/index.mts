@@ -2,10 +2,11 @@ import type { RequestHandler } from "express";
 import { randomUUID } from "node:crypto";
 
 const requestFields = [
-    "email", "password", "registrationToken", "name", "age", "gender", "countryCode", "phone", "code",
+    "email", "password", "registrationToken", "name", "age", "gender", "countryCode", "phone", "code", "deviceId",
 ] as const;
 const endpoints = new Set([
     "/users/register", "/users/register/profile", "/users/confirm", "/users/confirm/resend", "/users/login",
+    "/devices/claim", "/devices",
 ]);
 const hidden = "[oculto]";
 
@@ -82,7 +83,7 @@ export const logHttp: RequestHandler = (req, res, next) => {
 
     res.json = function (body: unknown) {
         if (typeof req.route?.path === "string") {
-            route = `${req.baseUrl === "/users" ? req.baseUrl : ""}${req.route.path}`;
+            route = `${req.baseUrl === "/users" || req.baseUrl === "/devices" ? req.baseUrl : ""}${req.route.path}`;
         }
         result = responseSummary(body);
         return json.call(this, body);

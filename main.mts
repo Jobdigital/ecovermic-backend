@@ -2,6 +2,8 @@ import express from "express";
 // import { spawn } from "node:child_process"
 import usersRouter from "#Routes/users";
 import { logHttp } from "#Infrastructure/http-logging";
+import { db } from "#Infrastructure/database";
+import { createDevicesRouter } from "#Routes/devices";
 
 process.loadEnvFile();
 
@@ -14,6 +16,7 @@ const app = express();
 app.use(logHttp);
 app.use(express.json());
 app.use("/users", usersRouter);
+app.use("/devices", createDevicesRouter(db));
 
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (res.headersSent) return next(err);

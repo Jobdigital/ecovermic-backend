@@ -6,7 +6,7 @@ API REST. Esta guía describe los endpoints actuales con la información necesar
 
 - **Base URL:** `http://<HOST>:<PORT>` (por defecto `http://127.0.0.1:3000`). Configurable con `HOST` y `PORT` en `.env`.
 - **Formato:** los endpoints documentados esperan un cuerpo JSON de tipo objeto con `Content-Type: application/json` y devuelven JSON. Una ruta o método no reconocido recibe la respuesta `404` predeterminada de Express, que no sigue necesariamente el formato JSON de la API.
-- **Autenticación:** `POST /users/login` devuelve un JWT firmado con HS256 que expira en 7 días. El claim `sub` contiene el identificador del usuario como texto. Actualmente no hay rutas protegidas ni middleware que lea el encabezado `Authorization`, por lo que ningún endpoint requiere enviar el token.
+- **Autenticación:** `POST /users/login` devuelve un JWT firmado con HS256 que expira en 7 días. El claim `sub` contiene el identificador del usuario como texto. Las rutas de dispositivos de desarrollo requieren `Authorization: Bearer <token>` y una cuenta confirmada.
 - **Texto y correos:** el correo se normaliza (sin espacios en los extremos y en minúsculas). Los mensajes de error están en español.
 
 ### Registro de peticiones
@@ -43,6 +43,34 @@ Los errores JSON gestionados por los endpoints y el middleware de errores tienen
 | 500 | `INTERNAL_ERROR` | Error no tratado por el servidor, incluidos errores del parser distintos de `entity.parse.failed`, como un cuerpo que supera el límite predeterminado de 100 KB. |
 
 Las rutas o métodos no reconocidos responden `404` con el manejador predeterminado de Express, no con el formato de error anterior. Un cuerpo vacío con `Content-Type: application/json` se interpreta como `{}` y produce errores de validación de campos obligatorios.
+
+## Vinculación de dispositivos (solo desarrollo)
+
+Esta función está **desactivada por defecto**. Para una instancia de pruebas
+aislada, iniciarla con la variable `DEV_DEVICE_LINKING=true`. Usar HTTPS para
+la conexión de la app al backend y configurar `AUTH_SECRET` estable; de otro
+modo los tokens caducan al reiniciar el servidor. No habilitarla en producción.
+
+La MAC eFuse del QR es pública y el backend no verifica el dispositivo ni la
+conexión Wi-Fi: cualquier cuenta autenticada que conozca el ID puede reclamarlo.
+BLE sin PoP tampoco lo autentica. El bloqueo exclusivo no es prueba de
+propiedad; para producción se requiere autenticación criptográfica del equipo y
+un procedimiento de transferencia de propiedad.
+
+* `POST /devices/claim`: con el JWT de la cuenta, cuerpo
+  `{"deviceId":"F4E065A84320"}` (12 hexadecimales mayúsculos). Retorna
+  `{"deviceId":"F4E065A84320","linked":true,"mode":"development"}`.
+  Repetir la solicitud con la misma cuenta es idempotente. Otra cuenta recibe
+  HTTP 409 `DEVICE_ALREADY_LINKED`.
+* `GET /devices`: devuelve `{"devices":[{"deviceId":"F4E065A84320"}],"mode":"development"}`
+  solo para la cuenta autenticada.
+* Sin token válido o con cuenta no confirmada: HTTP 401 `UNAUTHORIZED`; ID
+  inválido: HTTP 400 `INVALID_DEVICE_ID`; función desactivada: HTTP 404
+  `NOT_AVAILABLE`.
+
+Los registros se guardan en la tabla `dev_device_links`, separados de un
+eventual mecanismo seguro de producción. No existe aún una API de transferencia
+o desvinculación. No envíes credenciales ni tokens a los logs.
 
 ## Reglas de negocio por edad
 
