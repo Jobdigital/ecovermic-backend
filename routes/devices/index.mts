@@ -41,6 +41,14 @@ export function createDevicesRouter(database: DatabaseSync) {
             res.status(409).json({ error: { code: "DEVICE_ALREADY_LINKED", message: "El dispositivo ya está vinculado a otra cuenta" } });
             return;
         }
+        if (process.env.DEV_TELEMETRY === "true") {
+            database.exec(`CREATE TABLE IF NOT EXISTS dev_telemetry_links (
+                device_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id)
+            )`);
+            database.prepare("INSERT INTO dev_telemetry_links (device_id, user_id) VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET user_id = excluded.user_id")
+                .run(deviceId, res.locals.userId);
+        }
         res.json({ deviceId, linked: true, mode: "development" });
     });
 

@@ -4,6 +4,7 @@ import usersRouter from "#Routes/users";
 import { logHttp } from "#Infrastructure/http-logging";
 import { db } from "#Infrastructure/database";
 import { createDevicesRouter } from "#Routes/devices";
+import { installDevelopmentTelemetry, loadDevelopmentKeys } from "#Application/telemetry";
 
 process.loadEnvFile();
 
@@ -28,7 +29,7 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
     res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Error interno del servidor" } });
 });
 
-app.listen(port, host, (error?: Error) => {
+const server = app.listen(port, host, (error?: Error) => {
     if (error) {
         console.error(`No se pudo iniciar el servidor en ${host}:${port}:`, error.message);
         process.exit(1);
@@ -61,3 +62,10 @@ app.listen(port, host, (error?: Error) => {
 
     // localtonet.on("exit", (code) => process.exit(code ?? 0));
 });
+
+if (process.env.DEV_TELEMETRY === "true") {
+    if (process.env.DEV_DEVICE_LINKING !== "true") {
+        throw new Error("DEV_TELEMETRY requiere DEV_DEVICE_LINKING=true; no es para producción");
+    }
+    installDevelopmentTelemetry(server, db, loadDevelopmentKeys(process.env.DEV_TELEMETRY_KEYS, process.env.DEV_TELEMETRY_KEYS_DIR));
+}

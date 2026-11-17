@@ -79,6 +79,58 @@ o desvinculación. La consulta solo refleja estos registros de desarrollo, no un
 registro de dispositivos de producción. No envíes credenciales ni tokens a los
 logs.
 
+## Telemetría WebSocket (solo desarrollo)
+
+Esta función está desactivada por defecto y no es apta para producción. El QR
+público no demuestra posesión, las vinculaciones de desarrollo no son
+transferibles y las claves de prueba requieren protección adicional.
+En una instancia aislada, configurar `DEV_DEVICE_LINKING=true`,
+`DEV_TELEMETRY=true` y `DEV_TELEMETRY_KEYS` como un objeto JSON que relaciona
+cada ID con su clave de telemetría individual de 64 caracteres hexadecimales
+mayúsculos. El servidor falla al iniciar si la configuración es inválida.
+No escribir claves ni JWT en logs ni agregarlos al repositorio.
+Como alternativa a `DEV_TELEMETRY_KEYS`, `DEV_TELEMETRY_KEYS_DIR` apunta al
+directorio privado con archivos `<ID>.telemetry.json` generados por el
+aprovisionamiento del firmware. El backend los carga al iniciar y rechaza
+archivos inválidos. No configurar ambas variables a la vez. El directorio y
+sus archivos deben mantenerse privados; añadir equipos requiere reiniciar el
+backend después de aprovisionar sus claves.
+
+El equipo se conecta por WSS a `/telemetry/device`: el servidor envía un nonce
+aleatorio y comprueba HMAC-SHA256 de `telemetry-v1:<ID>:<nonce>` con la clave
+del dispositivo. La aplicación se conecta por WSS a `/telemetry/client` y
+envía como primer mensaje JSON `{"type":"auth","deviceId":"...","token":"..."}`.
+El token no debe ir en la URL. El usuario debe tener la cuenta confirmada y un
+vínculo de telemetría de desarrollo; los vínculos anteriores se reconfirman
+mediante `POST /devices/claim` con la telemetría de desarrollo habilitada.
+Esta reconfirmación no añade prueba de posesión.
+
+El servidor transmite `{"type":"status","online":true|false}` y
+`{"type":"readings","temperature":28.2,"humidity":32,"soilAdc":4095}`.
+Una lectura no disponible se representa como `null`; el ADC bruto no es un
+porcentaje calibrado. No se almacenan ni se reproducen lecturas anteriores.
+El proxy HTTPS/WSS debe permitir WebSocket y proteger la conexión hasta el
+backend; el certificado del túnel no autentica por sí mismo al dispositivo.
+
+Tras aprovisionar el equipo como se indica en el firmware, se puede preparar
+una instancia de prueba en PowerShell sin imprimir la clave:
+
+```powershell
+$record = Get-Content -Raw -LiteralPath 'C:\ruta\privada\ID.telemetry.json' | ConvertFrom-Json
+$keys = @{}
+$keys[$record.device_id] = $record.telemetry_key
+$env:DEV_DEVICE_LINKING = 'true'
+$env:DEV_TELEMETRY = 'true'
+$env:DEV_TELEMETRY_KEYS = ConvertTo-Json -Compress -InputObject $keys
+node main.mts
+```
+
+Iniciar desde la carpeta del backend y sustituir la ruta por el archivo privado
+correspondiente. La clave queda accesible al proceso y a su entorno; usar solo
+un equipo y una instancia aislados de desarrollo. Para varios equipos, añadir
+cada ID y su clave al mismo objeto. No incluir estas variables en capturas,
+logs, comandos públicos ni repositorios.
+
 ## Reglas de negocio por edad
 
 | Caso | Acceso |
