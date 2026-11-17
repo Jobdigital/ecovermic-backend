@@ -397,5 +397,38 @@ La aplicación carga `.env` con `process.loadEnvFile()` y requiere que exista el
 
 - **`users`**: `id`, `email` (único), `password_hash` (scrypt con sal), `created_at`, `name`, `age`, `gender`, `country_code`, `phone`, `email_verified`, `age_verified`, `confirmation_code_hash`, `confirmation_expires_at`, `confirmation_attempts`, `confirmation_sent_at`.
 - **`pending_registrations`**: `email` (clave), `password_hash`, `token_hash`, `expires_at`.
+- **`pending_email_changes`**: solicitud de cambio de correo, código hasheado, caducidad e intentos.
+- **`profile_password_attempts`**: límite temporal de intentos de contraseña para cambiar el correo.
 
 El token de registro se almacena como hash SHA-256. El código de confirmación se almacena como hash SHA-256 de `correo_normalizado:código`, no en texto plano.
+
+## Perfil de la cuenta autenticada
+
+Las rutas siguientes requieren `Authorization: Bearer <token>` de una cuenta
+confirmada y deben consumirse por HTTPS. Solo acceden a la cuenta del token.
+
+- `GET /users/profile` devuelve
+  `{"user":{"name":"Ana","email":"ana@correo.com","countryCode":"+52","phone":"0012345678"},"pendingEmail":null}`.
+  Los campos de perfil heredados pueden ser `null`; `pendingEmail` contiene el
+  correo nuevo solo mientras el código esté vigente.
+- `POST /users/profile` recibe `name`, `countryCode` y `phone` y devuelve el
+  perfil actualizado con la misma estructura. El nombre tiene de 2 a 30
+  caracteres, la clave de país sigue el formato `+52` y el número tiene
+  exactamente 10 dígitos. Estos cambios se guardan independientemente del
+  cambio de correo.
+- `POST /users/profile/email/request` recibe `email` y `password` actuales
+  (la contraseña pertenece a la cuenta, el correo es el nuevo). Tras verificar
+  la contraseña envía un código al nuevo correo y devuelve
+  `{"pendingEmail":"nuevo@correo.com"}`. El correo anterior continúa vigente.
+  El código dura 15 minutos; se debe esperar 60 segundos antes de pedir otro.
+  Se permiten cinco intentos de contraseña por cuenta cada 15 minutos.
+- `POST /users/profile/email/confirm` recibe `{"code":"004821"}` y, si el
+  código es válido y el correo sigue libre, cambia el correo y devuelve el
+  perfil actualizado. Cinco códigos incorrectos bloquean esa solicitud; hay
+  que pedir uno nuevo. El código queda vinculado a la cuenta autenticada.
+
+Estos endpoints pueden responder `401 UNAUTHORIZED`, `400 VALIDATION_ERROR`,
+`401 INVALID_PASSWORD`, `409 EMAIL_ALREADY_REGISTERED`, `502 EMAIL_SEND_FAILED`,
+`429 RESEND_TOO_SOON` o `TOO_MANY_ATTEMPTS`, y errores de código inválido o
+expirado. Sin SMTP configurado, el mecanismo de correo existente imprime el
+código en la consola; configurar SMTP para envíos reales.

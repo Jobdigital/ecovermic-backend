@@ -7,6 +7,7 @@ const requestFields = [
 const endpoints = new Set([
     "/users/register", "/users/register/profile", "/users/confirm", "/users/confirm/resend", "/users/login",
     "/devices/claim", "/devices",
+    "/users/profile", "/users/profile/email/request", "/users/profile/email/confirm",
 ]);
 const hidden = "[oculto]";
 

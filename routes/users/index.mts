@@ -4,25 +4,19 @@ import { promisify } from "node:util";
 import { db } from "#Infrastructure/database";
 import { sendMail } from "#Infrastructure/mailer";
 import { getAccess } from "#Application/access";
-import { signToken } from "#Application/auth";
+import { signToken, verifyToken } from "#Application/auth";
+import { createProfileRouter } from "./profile.mts";
+import { CODE_LENGTH, CODE_REGEX, COUNTRY_CODE_REGEX, EMAIL_MAX_LENGTH, EMAIL_REGEX, NAME_MAX, NAME_MIN, PHONE_REGEX } from "./validation.mts";
 
 const scryptAsync = promisify(scrypt);
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*[0-9]).{8,128}$/;
-const EMAIL_MAX_LENGTH = 254;
-const COUNTRY_CODE_REGEX = /^\+[1-9][0-9]{0,3}$/;
-const PHONE_REGEX = /^[0-9]{10}$/;
 const GENDERS = ["Mujer", "Hombre", "No binario", "Otro"];
-const NAME_MIN = 2;
-const NAME_MAX = 30;
 const AGE_MIN = 1;
 const AGE_MAX = 120;
 
 const PENDING_TTL_MS = 60 * 60 * 1000;
 const CONFIRMATION_TTL_MS = 15 * 60 * 1000;
-const CODE_LENGTH = 6;
-const CODE_REGEX = /^[0-9]{6}$/;
 const MAX_CODE_ATTEMPTS = 5;
 const RESEND_COOLDOWN_MS = 60 * 1000;
 
@@ -478,6 +472,8 @@ async function passwordMatches(password: string, stored: string): Promise<boolea
     const actual = (await scryptAsync(password, Buffer.from(saltHex ?? "", "hex"), 64)) as Buffer;
     return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
+
+router.use("/profile", createProfileRouter({ database: db, verifyToken, passwordMatches, sendConfirmationCode }));
 
 router.post("/login", async (req, res, next) => {
     try {
