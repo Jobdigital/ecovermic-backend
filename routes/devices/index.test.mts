@@ -24,9 +24,17 @@ test("development claims require authentication and remain exclusive and idempot
             headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
             body: JSON.stringify({ deviceId }),
         });
+    const list = (token?: string) =>
+        fetch(`${base}/devices`, {
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+        });
     try {
         delete process.env.DEV_DEVICE_LINKING;
         assert.equal((await request(signToken(1))).status, 404);
+        assert.equal((await list()).status, 401);
+        const available = await list(signToken(1));
+        assert.equal(available.status, 200);
+        assert.deepEqual(await available.json(), { devices: [], mode: "development" });
         process.env.DEV_DEVICE_LINKING = "true";
         assert.equal((await request()).status, 401);
         assert.equal((await request("invalid")).status, 401);
@@ -36,9 +44,9 @@ test("development claims require authentication and remain exclusive and idempot
             { deviceId: "F4E065A84320", linked: true, mode: "development" });
         assert.equal((await request(signToken(1))).status, 200);
         assert.equal((await request(signToken(2))).status, 409);
-        const owned = await fetch(`${base}/devices`, { headers: { authorization: `Bearer ${signToken(1)}` } });
+        const owned = await list(signToken(1));
         assert.deepEqual(await owned.json(), { devices: [{ deviceId: "F4E065A84320" }], mode: "development" });
-        const other = await fetch(`${base}/devices`, { headers: { authorization: `Bearer ${signToken(2)}` } });
+        const other = await list(signToken(2));
         assert.deepEqual(await other.json(), { devices: [], mode: "development" });
     } finally {
         await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

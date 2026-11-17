@@ -44,12 +44,15 @@ Los errores JSON gestionados por los endpoints y el middleware de errores tienen
 
 Las rutas o métodos no reconocidos responden `404` con el manejador predeterminado de Express, no con el formato de error anterior. Un cuerpo vacío con `Content-Type: application/json` se interpreta como `{}` y produce errores de validación de campos obligatorios.
 
-## Vinculación de dispositivos (solo desarrollo)
+## Consulta y vinculación de dispositivos
 
-Esta función está **desactivada por defecto**. Para una instancia de pruebas
-aislada, iniciarla con la variable `DEV_DEVICE_LINKING=true`. Usar HTTPS para
-la conexión de la app al backend y configurar `AUTH_SECRET` estable; de otro
-modo los tokens caducan al reiniciar el servidor. No habilitarla en producción.
+La consulta de dispositivos requiere un JWT válido de una cuenta confirmada y
+solo devuelve los dispositivos asociados a esa cuenta. La operación de reclamar
+un dispositivo está **desactivada por defecto**; para una instancia de pruebas
+aislada, habilitarla con `DEV_DEVICE_LINKING=true`. Usar HTTPS para la conexión
+de la app al backend y configurar `AUTH_SECRET` estable; de otro modo los
+tokens caducan al reiniciar el servidor. No habilitar la vinculación de
+desarrollo en producción.
 
 La MAC eFuse del QR es pública y el backend no verifica el dispositivo ni la
 conexión Wi-Fi: cualquier cuenta autenticada que conozca el ID puede reclamarlo.
@@ -57,20 +60,24 @@ BLE sin PoP tampoco lo autentica. El bloqueo exclusivo no es prueba de
 propiedad; para producción se requiere autenticación criptográfica del equipo y
 un procedimiento de transferencia de propiedad.
 
-* `POST /devices/claim`: con el JWT de la cuenta, cuerpo
+* `GET /devices`: requiere autenticación y devuelve
+  `{"devices":[{"deviceId":"F4E065A84320"}],"mode":"development"}` solo para la
+  cuenta autenticada. Funciona aunque la vinculación de desarrollo esté
+  desactivada.
+* `POST /devices/claim`: solo cuando `DEV_DEVICE_LINKING=true`. Con el JWT de la cuenta, cuerpo
   `{"deviceId":"F4E065A84320"}` (12 hexadecimales mayúsculos). Retorna
   `{"deviceId":"F4E065A84320","linked":true,"mode":"development"}`.
   Repetir la solicitud con la misma cuenta es idempotente. Otra cuenta recibe
   HTTP 409 `DEVICE_ALREADY_LINKED`.
-* `GET /devices`: devuelve `{"devices":[{"deviceId":"F4E065A84320"}],"mode":"development"}`
-  solo para la cuenta autenticada.
 * Sin token válido o con cuenta no confirmada: HTTP 401 `UNAUTHORIZED`; ID
-  inválido: HTTP 400 `INVALID_DEVICE_ID`; función desactivada: HTTP 404
-  `NOT_AVAILABLE`.
+  inválido: HTTP 400 `INVALID_DEVICE_ID`; vinculación de desarrollo desactivada:
+  HTTP 404 `NOT_AVAILABLE` en `POST /devices/claim`.
 
 Los registros se guardan en la tabla `dev_device_links`, separados de un
 eventual mecanismo seguro de producción. No existe aún una API de transferencia
-o desvinculación. No envíes credenciales ni tokens a los logs.
+o desvinculación. La consulta solo refleja estos registros de desarrollo, no un
+registro de dispositivos de producción. No envíes credenciales ni tokens a los
+logs.
 
 ## Reglas de negocio por edad
 
@@ -316,7 +323,8 @@ El código anterior se invalida y se inicia el período de espera antes de inten
 }
 ```
 
-El token se entrega al cliente, pero actualmente ningún endpoint lo solicita ni verifica.
+El token se entrega al cliente. `GET /devices` y `POST /devices/claim`
+requieren un JWT válido de una cuenta confirmada.
 
 ### Errores
 

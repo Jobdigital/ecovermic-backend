@@ -6,10 +6,6 @@ export function createDevicesRouter(database: DatabaseSync) {
     const router = Router();
 
     router.use((req, res, next) => {
-        if (process.env.DEV_DEVICE_LINKING !== "true") {
-            res.status(404).json({ error: { code: "NOT_AVAILABLE", message: "Vinculación de desarrollo desactivada" } });
-            return;
-        }
         const match = /^Bearer ([^\s]+)$/i.exec(req.get("authorization") ?? "");
         const session = match ? verifyToken(match[1]) : null;
         if (!session || !database.prepare("SELECT 1 FROM users WHERE id = ? AND email_verified = 1").get(session.sub)) {
@@ -26,6 +22,10 @@ export function createDevicesRouter(database: DatabaseSync) {
     });
 
     router.post("/claim", (req, res) => {
+        if (process.env.DEV_DEVICE_LINKING !== "true") {
+            res.status(404).json({ error: { code: "NOT_AVAILABLE", message: "Vinculación de desarrollo desactivada" } });
+            return;
+        }
         const body: unknown = req.body;
         if (typeof body !== "object" || body === null || Array.isArray(body) ||
             typeof (body as Record<string, unknown>).deviceId !== "string" ||
