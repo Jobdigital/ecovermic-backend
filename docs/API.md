@@ -106,9 +106,11 @@ mediante `POST /devices/claim` con la telemetría de desarrollo habilitada.
 Esta reconfirmación no añade prueba de posesión.
 
 El servidor transmite `{"type":"status","online":true|false}` y
-`{"type":"readings","temperature":28.2,"humidity":32,"soilAdc":4095}`.
-Una lectura no disponible se representa como `null`; el ADC bruto no es un
-porcentaje calibrado. No se almacenan ni se reproducen lecturas anteriores.
+`{"type":"readings","temperature":28.2,"humidity":32,"soilAdc":2000,"soilMoisture":50}`.
+El firmware anterior puede omitir `soilMoisture`. Una lectura no disponible
+se representa como `null`; `soilMoisture` es una estimación relativa sin
+calibrar y `soilAdc` conserva el valor bruto. No se almacenan ni se reproducen
+lecturas anteriores.
 El proxy HTTPS/WSS debe permitir WebSocket y proteger la conexión hasta el
 backend; el certificado del túnel no autentica por sí mismo al dispositivo.
 

@@ -11,6 +11,7 @@ type DeviceReadings = {
     temperature: number | null;
     humidity: number | null;
     soilAdc: number | null;
+    soilMoisture?: number | null;
 };
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -24,7 +25,9 @@ function within(value: unknown, min: number, max: number): value is number | nul
 function readings(value: unknown): value is DeviceReadings {
     return record(value) && value.type === "readings" &&
         within(value.temperature, -40, 80) && within(value.humidity, 0, 100) &&
-        within(value.soilAdc, 0, 4095) && (value.soilAdc === null || Number.isInteger(value.soilAdc));
+        within(value.soilAdc, 0, 4095) && (value.soilAdc === null || Number.isInteger(value.soilAdc)) &&
+        (!("soilMoisture" in value) ||
+            (within(value.soilMoisture, 0, 100) && (value.soilAdc !== null || value.soilMoisture === null)));
 }
 
 export function parseDevelopmentKeys(raw: string | undefined): Map<string, Buffer> {
@@ -176,6 +179,7 @@ export function installDevelopmentTelemetry(server: Server, database: DatabaseSy
                     temperature: message.temperature,
                     humidity: message.humidity,
                     soilAdc: message.soilAdc,
+                    ...(message.soilMoisture !== undefined ? { soilMoisture: message.soilMoisture } : {}),
                 });
             });
         });

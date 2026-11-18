@@ -78,8 +78,12 @@ test("development telemetry authenticates devices and restricts account access",
         const received = nextMessage(client);
         device.send(JSON.stringify({ type: "readings", temperature: 28.2, humidity: 32, soilAdc: 4095 }));
         assert.deepEqual(await received, { type: "readings", temperature: 28.2, humidity: 32, soilAdc: 4095 });
+        await new Promise(resolve => setTimeout(resolve, 1100));
+        const estimated = nextMessage(client);
+        device.send(JSON.stringify({ type: "readings", temperature: 28.2, humidity: 32, soilAdc: 2000, soilMoisture: 50 }));
+        assert.deepEqual(await estimated, { type: "readings", temperature: 28.2, humidity: 32, soilAdc: 2000, soilMoisture: 50 });
         const offline = nextMessage(client);
-        device.send(JSON.stringify({ type: "readings", temperature: 28, humidity: 32, soilAdc: 4096 }));
+        device.send(JSON.stringify({ type: "readings", temperature: 28, humidity: 32, soilAdc: 2000, soilMoisture: 101 }));
         assert.deepEqual(await offline, { type: "status", online: false });
     } finally {
         for (const socket of sockets) socket.terminate();
